@@ -1,0 +1,17 @@
+# Dockerfile for lambda package build
+FROM amazonlinux:latest
+RUN yum install -y amazon-linux-extras
+RUN yum install -y zip
+RUN amazon-linux-extras enable python3.8
+RUN amazon-linux-extras install python3.8
+RUN curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+RUN python3.8 get-pip.py
+VOLUME /build
+COPY requirements.txt app/
+WORKDIR app
+RUN pip install -t . -r ./requirements.txt
+COPY . ./
+RUN chmod -R 755 .
+ENTRYPOINT ["zip", "-r", "/build/brownbag.zip", "."]
+
+

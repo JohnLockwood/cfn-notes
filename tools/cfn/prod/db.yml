@@ -1,0 +1,118 @@
+# Source: https://github.com/aws-samples/aws-aurora-serverless-data-api-sam/blob/master/deploy_scripts/
+# Cf.
+# https://aws.amazon.com/blogs/database/using-the-data-api-to-interact-with-an-amazon-aurora-serverless-mysql-database/
+# https://forums.aws.amazon.com/thread.jspa?messageID=917537
+
+# "It uses MySQL but the only attributes you need to change
+# to have a PostgreSQL database instead are: Engine, EngineVersion, MaxCapacity and MinCapacity."
+
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Originally an application plus database, reworked to be just database
+Parameters:
+  EnvType:
+    Description: "Environment type (eg, dev, qa, prod)"
+    Type: String
+    Default: prod
+  DBClusterName:
+    Description: "Aurora RDS cluster name"
+    Type: String
+    Default: brownbag-prod-cluster
+  DatabaseName:
+    Description: "Aurora RDS database name"
+    Type: String
+    Default: brownbag_prod
+  DBMasterUserName:
+    AllowedPattern: "[a-zA-Z0-9_]+"
+    ConstraintDescription: must be between 1 to 16 alphanumeric characters.
+    Description: The database admin account user name, between 1 to 16 alphanumeric characters.
+    MaxLength: '16'
+    MinLength: '1'
+    Type: String
+    Default: admin_user
+
+
+Resources:
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://brownbag-api-deployment.s3.amazonaws.com/cloudformation/prod/vpc.yml
+      
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: CloudFormation managed DB subnet group.
+      SubnetIds:
+        - !GetAtt [ 'VPCStack', 'Outputs.PrivateSubnetOne' ]
+        - !GetAtt [ 'VPCStack', 'Outputs.PrivateSubnetTwo' ]
+
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${EnvType}-AuroraUserSecret"
+      Description: RDS database auto-generated user password
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${DBMasterUserName}"}'
+        GenerateStringKey: "password"
+        PasswordLength: 30
+        ExcludeCharacters: '"@/\'
+  RDSCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      DBClusterIdentifier: !Ref DBClusterName
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref DBSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref DBSecret, ':SecretString:password}}' ]]
+      DatabaseName: !Ref DatabaseName
+      Engine: aurora-postgresql
+      EngineMode: serverless
+      EngineVersion: 10.2
+      ScalingConfiguration:
+        AutoPause: true
+        MaxCapacity: 4
+        MinCapacity: 2
+        SecondsUntilAutoPause: 900 # 15 min
+      DBSubnetGroupName:
+        Ref: DBSubnetGroup
+Outputs:
+  StackName:
+    Description: Aurora Stack Name
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub ${AWS::StackName}-StackName
+
+  DatabaseName:
+    Description: Aurora Database Name
+    Value: !Ref DatabaseName
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseName
+
+  DatabaseClusterArn:
+    Description: Aurora Cluster ARN
+    Value: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${DBClusterName}
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseClusterArn
+
+  DatabaseSecretArn:
+    Description: Aurora Secret ARN
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseSecretArn
+
+  DatabaseClusterID:
+    Description: Aurora Cluster ID
+    Value: !Ref RDSCluster
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseClusterID
+
+  AuroraDbURL:
+    Description: Aurora Database URL
+    Value: !GetAtt RDSCluster.Endpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseURL
+
+  DatabaseMasterUserName:
+    Description: Aurora Database User
+    Value: !Ref DBMasterUserName
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseMasterUserName
+

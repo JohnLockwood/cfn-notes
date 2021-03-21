@@ -1,0 +1,65 @@
+Parameters:    
+    EcsOptimizedAmiId:
+        Type: "AWS::SSM::Parameter::Value<String>"
+        Description: "AWS Linux 2 AMI ready to use with ECS"
+        Default: "/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id"
+    LatestAmiId:
+        Type:  "String"
+        Default: "ami-04d29b6f966df1537"
+    InstanceType:
+        Type: "String"
+        Default: "t3.small"
+
+Resources:
+    EC2Instance:
+        Type: AWS::EC2::Instance
+        Metadata: 
+            AWS::CloudFormation::Init:
+                config:                                    
+                    commands:
+                        a1_install_docker: 
+                            command: "sudo yum update -y && sudo amazon-linux-extras install -y docker && sudo yum install -y docker && sudo service docker start && sudo usermod -a -G docker ec2-user"
+        Properties:
+            ImageId: !Ref EcsOptimizedAmiId
+            InstanceType: !Ref InstanceType
+            SecurityGroups:
+            - !Ref WebSecurityGroup
+            - !Ref SSHSecurityGroup
+            BlockDeviceMappings:
+            -
+                DeviceName: /dev/sda1
+                Ebs:
+                    VolumeSize: 50
+            # UserData: !Base64 
+            #     'Fn::Join':
+            #         - ''
+            #         - - |
+            #             #!/bin/bash -xe
+            #           - |
+            #             # Install the files and packages from the metadata
+            #           - '/opt/aws/bin/cfn-init -v '
+            #           - '         --stack '
+            #           - !Ref 'AWS::StackName'
+            #           - '         --resource EC2Instance '
+            #           - '         --region '
+            #           - !Ref 'AWS::Region'
+            #           - |+
+
+    SSHSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Enable SSH access via port 22
+            SecurityGroupIngress:
+                CidrIp: 0.0.0.0/0
+                FromPort: 22
+                IpProtocol: tcp
+                ToPort: 22
+    WebSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Enable HTTP access via user defined port
+            SecurityGroupIngress:
+                CidrIp: 0.0.0.0/0
+                FromPort: 80
+                IpProtocol: tcp
+                ToPort: 80

@@ -1,0 +1,141 @@
+Parameters:    
+    LatestAmiId:
+        # Type: "AWS::SSM::Parameter::Value<String>"
+        # Default: "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+        Type:  "String"
+        Default: "ami-04d29b6f966df1537"
+    InstanceType:
+        Type: "String"
+        Default: "t3.small"
+    VolumeId:
+        Type: "String"
+        Default: "null"
+Conditions:
+    CreateVolume: !Equals
+        - !Ref VolumeId
+        - "null"
+Resources:
+    EC2Instance:
+        Type: AWS::EC2::Instance
+        Metadata: 
+            AWS::CloudFormation::Init:
+                config:
+                    packages:
+                        yum:
+                            docker: []
+                            git: []
+                            jq: []
+                    services:
+                        sysvinit:
+                            docker:
+                                enabled: "true"
+                                ensureRunning: "true"
+                    commands:
+                        a1_install_docker: 
+                            command:
+                                'Fn::Join':
+                                    - "\n"
+                                    - - sudo service docker start
+                                      - sudo usermod -a -G docker ec2-user
+                                      - sudo curl -L https://github.com/docker/compose/releases/download/1.27.4/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+                                      - sudo chmod +x /usr/local/bin/docker-compose
+                                      - git clone https://github.com/JohnLockwood/brownbag.git
+                                      - cd brownbag
+                                      - mkdir secret
+                                      - aws ssm get-parameter --with-decrypt --name /languagelearn/production/environment --region us-east-1 | jq -r .Parameter.Value > secret/.env
+                                      - fs=$(sudo file -s /dev/nvme1n1) # nvme0n1 is root, 1n1 is first attached vol, etc.
+                                      - "if [ \"$fs\" = \"/dev/nvme1n1: data\" ]; then sudo mkfs -t xfs /dev/nvme1n1 ; fi;"
+                                      - sudo mkdir /data
+                                      - sudo mount /dev/nvme1n1 /data
+                                      - sudo mkdir /data/postgres
+                                      - sudo mkdir /data/logs
+                                      - sudo chown -R ec2-user:docker /data
+                                      - docker-compose build
+                                      - docker-compose up& # This arm-waving up and down business probably relates to not having real migrations
+                                      - sleep 10
+                                      - docker-compose down
+                                      - docker-compose up > /data/logs/docker-compose.log
+        Properties:
+            ImageId: !Ref LatestAmiId
+            InstanceType: !Ref InstanceType
+            IamInstanceProfile: "EC2SSMReadOnly"
+            AvailabilityZone: "us-east-1b"
+            SecurityGroups:
+            - !Ref WebSecurityGroup
+            - !Ref SSHSecurityGroup
+
+            UserData: !Base64
+                'Fn::Join':
+                    - ''
+                    - - |
+                        #!/bin/bash -xe
+                      - |
+                        # Install the files and packages from the metadata
+                      - '/opt/aws/bin/cfn-init -v '
+                      - '         --stack '
+                      - !Ref 'AWS::StackName'
+                      - '         --resource EC2Instance '
+                      - '         --region '
+                      - !Ref 'AWS::Region'
+                      - |+
+
+                      - |
+                        # Signal the status from cfn-init
+                      - '/opt/aws/bin/cfn-signal -e $? '
+                      - '         --stack '
+                      - !Ref 'AWS::StackName'
+                      - '         --resource EC2Instance '
+                      - '         --region '
+                      - !Ref 'AWS::Region'
+                      - |+
+
+    VolumeAttachment:
+        Type: AWS::EC2::VolumeAttachment
+        Properties:
+            InstanceId: !Ref EC2Instance
+            VolumeId:
+              !If [CreateVolume, !Ref BrownbagEC2Volume, !Ref VolumeId]
+            Device: /dev/sdf
+
+
+    BrownbagEC2Volume:
+        Type:  AWS::EC2::Volume
+        Condition: CreateVolume
+        DeletionPolicy: Retain
+        Properties:
+            Encrypted: true
+            AvailabilityZone: "us-east-1b"
+            Size: 20
+            VolumeType:  "gp3"
+            Tags:
+                - Key: Name
+                  Value:  BrownbagEC2Volume
+            AutoEnableIO: true
+    SSHSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Enable SSH access via port 22
+            SecurityGroupIngress:
+                CidrIp: 0.0.0.0/0
+                FromPort: 22
+                IpProtocol: tcp
+                ToPort: 22
+    WebSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Enable HTTP access via user defined port
+            SecurityGroupIngress:
+                CidrIp: 0.0.0.0/0
+                FromPort: 80
+                IpProtocol: tcp
+                ToPort: 80
+
+    DNSRecords:
+        Type:  AWS::Route53::RecordSet
+        Properties:
+            Name: "languagelearn.pro"
+            HostedZoneId: "Z02334682U89LH3CFGMR8" # LanguageLearn.pro
+            Type: A
+            ResourceRecords:
+                - !GetAtt EC2Instance.PublicIp
+            TTL: '30'
